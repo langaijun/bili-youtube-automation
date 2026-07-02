@@ -1,0 +1,392 @@
+"""半自动视频制作 Agent - Streamlit 主界面"""
+import json
+import sys
+from pathlib import Path
+
+import streamlit as st
+
+# 确保 src 目录可导入
+sys.path.insert(0, str(Path(__file__).parent))
+
+from config import IMAGE_STYLES, DEFAULT_STYLE, OUTPUT_DIR, MUSIC_DIR
+
+st.set_page_config(page_title="半自动视频制作 Agent", page_icon="🎬", layout="wide")
+st.title("🎬 半自动视频制作 Agent")
+st.caption("输入内容 → AI 生成脚本 → 配图+旁白 → 合成视频 | 适用于 B站/YouTube 深度解读")
+
+# ── Session State 初始化 ──
+defaults = {
+    "project_name": "",
+    "image_style": DEFAULT_STYLE,
+    "script": None,
+    "script_confirmed": False,
+    "covers": [],
+    "selected_cover": None,
+    "scene_images": [],
+    "selected_scene": None,
+    "audio_paths": [],
+    "bgm_path": None,
+    "video_path": None,
+    "subtitle_path": None,
+}
+for key, val in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
+
+
+def get_output_dir() -> Path:
+    name = st.session_state.project_name or "untitled"
+    d = OUTPUT_DIR / name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# ── Tab 布局 ──
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["① 脚本", "② 封面", "③ 素材", "④ 合成", "⑤ 输出"])
+
+# ════════════════════════════════════════════
+# Tab ① 脚本生成
+# ════════════════════════════════════════════
+with tab1:
+    st.header("脚本生成")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        project_name = st.text_input(
+            "项目名称",
+            value=st.session_state.project_name,
+            placeholder="例如: naval_财富自由解读",
+        )
+        st.session_state.project_name = project_name
+
+    with col2:
+        image_style = st.selectbox(
+            "图片风格",
+            options=list(IMAGE_STYLES.keys()),
+            index=list(IMAGE_STYLES.keys()).index(st.session_state.image_style),
+        )
+        st.session_state.image_style = image_style
+
+    user_input = st.text_area(
+        "输入你的内容（想法/关键词/文章片段/书名）",
+        height=200,
+        placeholder="例如：我最近在读 Naval Ravikant 的《The Almanack of Naval Ravikant》，他关于财富自由的观点...",
+    )
+
+    if st.button("🤖 生成脚本", type="primary", disabled=not user_input.strip()):
+        with st.spinner("正在生成脚本，请稍候..."):
+            from src.script_generator import generate_script
+            output_dir = get_output_dir()
+            script = generate_script(user_input, image_style, output_dir)
+            st.session_state.script = script
+            st.session_state.script_confirmed = False
+        st.rerun()
+
+    # 脚本预览与编辑
+    if st.session_state.script:
+        script = st.session_state.script
+        st.success(f"✅ 脚本已生成: **{script.get('title', '')}**")
+
+        segs = script.get("segments", [])
+        total_dur = sum(s.get("estimated_duration", 0) for s in segs)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("段落数", len(segs))
+        with col2:
+            st.metric("预估时长", f"{total_dur // 60}分{total_dur % 60}秒")
+        with col3:
+            st.metric("场景配图", len(script.get("scenes", [])))
+
+        st.subheader("出处标注")
+        st.info(script.get("source_attribution", ""))
+
+        st.subheader("旁白段落（可编辑）")
+        for i, seg in enumerate(segs):
+            with st.expander(f"段落 {seg['id']} ({seg.get('estimated_duration', '?')}s)", expanded=False):
+                new_text = st.text_area(
+                    f"旁白文本",
+                    value=seg.get("narration_text", ""),
+                    key=f"seg_edit_{seg['id']}",
+                    height=100,
+                    label_visibility="collapsed",
+                )
+                st.session_state.script["segments"][i]["narration_text"] = new_text
+
+                if st.button(f"🔄 重新生成此段", key=f"regen_{seg['id']}"):
+                    with st.spinner("重新生成中..."):
+                        from src.script_generator import regenerate_segment
+                        new_text_ai = regenerate_segment(
+                            seg.get("narration_text", ""),
+                            st.session_state.image_style,
+                        )
+                        st.session_state.script["segments"][i]["narration_text"] = new_text_ai
+                    st.rerun()
+
+        if st.button("✅ 确认脚本，进入下一步", type="primary"):
+            st.session_state.script_confirmed = True
+            # 保存更新后的脚本
+            script_path = get_output_dir() / "script.json"
+            with open(script_path, "w", encoding="utf-8") as f:
+                json.dump(st.session_state.script, f, ensure_ascii=False, indent=2)
+            st.rerun()
+
+
+# ════════════════════════════════════════════
+# Tab ② 封面生成
+# ════════════════════════════════════════════
+with tab2:
+    st.header("封面生成")
+
+    if not st.session_state.script_confirmed:
+        st.warning("⚠️ 请先在「① 脚本」Tab 中生成并确认脚本")
+    else:
+        script = st.session_state.script
+        if st.button("🎨 生成 2 张封面候选", disabled=bool(st.session_state.covers)):
+            with st.spinner("正在生成封面..."):
+                from src.cover_generator import generate_cover_prompts, generate_covers
+                output_dir = get_output_dir() / "covers"
+                prompts = generate_cover_prompts(
+                    script.get("title", ""),
+                    script.get("description", ""),
+                )
+                covers = generate_covers(prompts, output_dir)
+                st.session_state.covers = [str(p) for p in covers]
+            st.rerun()
+
+        if st.session_state.covers:
+            st.subheader("选择封面")
+            cols = st.columns(len(st.session_state.covers))
+            for i, cover_path in enumerate(st.session_state.covers):
+                with cols[i]:
+                    st.image(cover_path, caption=f"封面 {i+1}", use_container_width=True)
+                    if st.button(f"✅ 选择此封面", key=f"cover_pick_{i}"):
+                        st.session_state.selected_cover = cover_path
+                        st.rerun()
+
+            if st.session_state.selected_cover:
+                st.success(f"✅ 已选择封面: {Path(st.session_state.selected_cover).name}")
+
+
+# ════════════════════════════════════════════
+# Tab ③ 素材生成
+# ════════════════════════════════════════════
+with tab3:
+    st.header("素材生成")
+
+    if not st.session_state.script_confirmed:
+        st.warning("⚠️ 请先在「① 脚本」Tab 中生成并确认脚本")
+    else:
+        script = st.session_state.script
+
+        # ── 配图 ──
+        st.subheader("🖼️ 配图（2张选1张）")
+
+        if st.button("生成 2 张配图候选", disabled=bool(st.session_state.scene_images)):
+            with st.spinner("正在生成配图..."):
+                from src.image_generator import generate_scene_prompts, generate_images
+                output_dir = get_output_dir() / "images"
+                prompts = generate_scene_prompts(
+                    script.get("title", ""),
+                    script.get("description", ""),
+                    st.session_state.image_style,
+                )
+                images = generate_images(prompts, output_dir)
+                st.session_state.scene_images = [str(p) for p in images]
+            st.rerun()
+
+        if st.session_state.scene_images:
+            cols = st.columns(len(st.session_state.scene_images))
+            for i, img_path in enumerate(st.session_state.scene_images):
+                with cols[i]:
+                    st.image(img_path, caption=f"配图 {i+1}", use_container_width=True)
+                    if st.button(f"✅ 选择此配图", key=f"scene_pick_{i}"):
+                        st.session_state.selected_scene = img_path
+                        st.rerun()
+
+            if st.session_state.selected_scene:
+                st.success(f"✅ 已选择配图: {Path(st.session_state.selected_scene).name}")
+
+        # ── 旁白音频 ──
+        st.subheader("🎤 旁白音频")
+
+        if st.button("生成全部旁白", disabled=bool(st.session_state.audio_paths)):
+            from src.audio_generator import generate_audio
+            output_dir = get_output_dir() / "audio"
+            progress_bar = st.progress(0, text="准备生成...")
+
+            def on_progress(pct, msg):
+                progress_bar.progress(pct, text=msg)
+
+            audio_paths = generate_audio(
+                script.get("segments", []),
+                output_dir,
+                progress_callback=on_progress,
+            )
+            st.session_state.audio_paths = [str(p) for p in audio_paths]
+            st.rerun()
+
+        if st.session_state.audio_paths:
+            st.success(f"✅ 已生成 {len(st.session_state.audio_paths)} 段旁白")
+
+        # ── BGM ──
+        st.subheader("🎵 背景音乐")
+        bgm_option = st.radio(
+            "选择 BGM",
+            ["不使用 BGM", "上传自己的音乐", "选择预置音乐"],
+            horizontal=True,
+        )
+
+        if bgm_option == "上传自己的音乐":
+            uploaded = st.file_uploader("上传 MP3 文件", type=["mp3", "wav"])
+            if uploaded:
+                bgm_path = get_output_dir() / "custom_bgm.mp3"
+                with open(bgm_path, "wb") as f:
+                    f.write(uploaded.getbuffer())
+                st.session_state.bgm_path = str(bgm_path)
+                st.success("✅ 自定义 BGM 已上传")
+
+        elif bgm_option == "选择预置音乐":
+            music_files = list(MUSIC_DIR.glob("*.mp3")) if MUSIC_DIR.exists() else []
+            if music_files:
+                names = [f.name for f in music_files]
+                chosen = st.selectbox("选择预置 BGM", names)
+                st.session_state.bgm_path = str(MUSIC_DIR / chosen)
+            else:
+                st.info("暂无预置音乐，请将 mp3 文件放入 assets/music/ 目录")
+
+        else:
+            st.session_state.bgm_path = None
+
+
+# ════════════════════════════════════════════
+# Tab ④ 视频合成
+# ════════════════════════════════════════════
+with tab4:
+    st.header("视频合成")
+
+    can_compose = (
+        st.session_state.selected_scene
+        and st.session_state.audio_paths
+        and st.session_state.script_confirmed
+    )
+
+    if not can_compose:
+        missing = []
+        if not st.session_state.selected_scene:
+            missing.append("配图")
+        if not st.session_state.audio_paths:
+            missing.append("旁白音频")
+        if not st.session_state.script_confirmed:
+            missing.append("确认脚本")
+        st.warning(f"⚠️ 请先完成: {', '.join(missing)}")
+    else:
+        if st.button("🎬 开始合成视频", type="primary",
+                      disabled=bool(st.session_state.video_path)):
+            from src.video_composer import compose_video
+            from src.subtitle_generator import generate_subtitles
+
+            output_dir = get_output_dir()
+            progress_bar = st.progress(0, text="准备合成...")
+
+            def on_progress(pct, msg):
+                progress_bar.progress(pct, text=msg)
+
+            bgm = Path(st.session_state.bgm_path) if st.session_state.bgm_path else None
+
+            video_path = compose_video(
+                image_path=Path(st.session_state.selected_scene),
+                audio_paths=[Path(p) for p in st.session_state.audio_paths],
+                output_path=output_dir / "final_video.mp4",
+                bg_music_path=bgm,
+                progress_callback=on_progress,
+            )
+            st.session_state.video_path = str(video_path)
+
+            # 生成字幕
+            subtitle_path = generate_subtitles(
+                segments=st.session_state.script.get("segments", []),
+                audio_paths=[Path(p) for p in st.session_state.audio_paths],
+                output_path=output_dir / "subtitles.srt",
+            )
+            st.session_state.subtitle_path = str(subtitle_path)
+            st.rerun()
+
+        if st.session_state.video_path:
+            st.success("✅ 视频合成完成！")
+            st.video(st.session_state.video_path)
+
+
+# ════════════════════════════════════════════
+# Tab ⑤ 输出与下载
+# ════════════════════════════════════════════
+with tab5:
+    st.header("输出与下载")
+
+    if not st.session_state.video_path:
+        st.warning("⚠️ 请先在「④ 合成」Tab 中完成视频合成")
+    else:
+        script = st.session_state.script or {}
+
+        # 元数据
+        st.subheader("📋 元数据")
+        st.text(f"标题: {script.get('title', '')}")
+        st.text(f"描述:\n{script.get('description', '')}")
+        st.text(f"出处: {script.get('source_attribution', '')}")
+
+        # 保存元数据文件
+        metadata_text = (
+            f"标题: {script.get('title', '')}\n\n"
+            f"描述:\n{script.get('description', '')}\n\n"
+            f"出处: {script.get('source_attribution', '')}\n\n"
+            f"标签: AI, 知识分享, 深度解读\n"
+        )
+        metadata_path = get_output_dir() / "metadata.txt"
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            f.write(metadata_text)
+
+        # 下载按钮
+        st.subheader("📥 下载")
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            if Path(st.session_state.video_path).exists():
+                with open(st.session_state.video_path, "rb") as f:
+                    st.download_button(
+                        "📥 下载视频",
+                        data=f.read(),
+                        file_name="final_video.mp4",
+                        mime="video/mp4",
+                        type="primary",
+                    )
+
+        with col2:
+            if st.session_state.selected_cover and Path(st.session_state.selected_cover).exists():
+                with open(st.session_state.selected_cover, "rb") as f:
+                    st.download_button(
+                        "📥 下载封面",
+                        data=f.read(),
+                        file_name=Path(st.session_state.selected_cover).name,
+                        mime="image/jpeg",
+                    )
+
+        with col3:
+            if st.session_state.subtitle_path and Path(st.session_state.subtitle_path).exists():
+                with open(st.session_state.subtitle_path, "r", encoding="utf-8") as f:
+                    st.download_button(
+                        "📥 下载字幕",
+                        data=f.read().encode("utf-8"),
+                        file_name="subtitles.srt",
+                        mime="text/plain",
+                    )
+
+        with col4:
+            st.download_button(
+                "📥 下载元数据",
+                data=metadata_text.encode("utf-8"),
+                file_name="metadata.txt",
+                mime="text/plain",
+            )
+
+        st.divider()
+        st.info("💡 请手动将视频上传到 B站/YouTube，上传时填写元数据中的标题和描述。")
+        st.text(f"📂 输出目录: {get_output_dir()}")

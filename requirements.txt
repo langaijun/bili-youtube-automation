@@ -1,0 +1,8 @@
+streamlit                 # Web 界面
+openai                    # Qwen LLM (OpenAI-compatible)
+dashscope                 # CosyVoice TTS + 通义万相图片生成
+moviepy==1.0.3            # 视频合成
+Pillow>=10.0.0            # 图片处理
+pydub                     # 音频格式转换
+requests                  # HTTP 下载图片
+python-dotenv             # 环境变量管理
