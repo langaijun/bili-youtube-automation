@@ -1,4 +1,5 @@
 """阶段3a: 配图生成（2张选1张）"""
+import json
 import time
 from http import HTTPStatus
 from pathlib import Path
@@ -20,28 +21,34 @@ def _get_llm_client() -> OpenAI:
     return OpenAI(api_key=DASHSCOPE_API_KEY, base_url=QWEN_BASE_URL)
 
 
+def _get_style_config(image_style: str) -> dict:
+    """获取风格配置"""
+    return IMAGE_STYLES.get(image_style, IMAGE_STYLES["极简插画"])
+
+
 def generate_scene_prompts(title: str, description: str, image_style: str) -> list[str]:
     """用 Qwen 为 2 张配图生成提示词"""
     client = _get_llm_client()
-    style_prefix = IMAGE_STYLES.get(image_style, IMAGE_STYLES["极简插画"])
+    style_cfg = _get_style_config(image_style)
+    prefix = style_cfg["prompt_prefix"]
 
     prompt = f"""根据以下视频标题和描述，生成 2 张场景配图的英文提示词。
 
 视频标题：{title}
 视频描述：{description[:300]}
-图片风格：{style_prefix}
+图片风格要求：{prefix}
 
 要求：
 - 两张图应该有不同的视角/场景，但风格统一
 - 适合知识博主深度解读视频的背景配图
 - 不包含任何文字或人物面部特写
-- 每张提示词都要包含风格前缀: {style_prefix}
+- 每张提示词描述具体的画面内容（场景、物体、氛围），不要重复风格描述
 
 输出 JSON：
 {{
   "prompts": [
-    "英文提示词1",
-    "英文提示词2"
+    "英文提示词1（描述画面内容）",
+    "英文提示词2（描述画面内容）"
   ]
 }}"""
 
@@ -55,29 +62,49 @@ def generate_scene_prompts(title: str, description: str, image_style: str) -> li
         temperature=0.7,
     )
 
-    import json
     result = json.loads(response.choices[0].message.content.strip())
-    return result.get("prompts", list(result.values())[0] if result else [])
+    raw_prompts = result.get("prompts", list(result.values())[0] if result else [])
+
+    # 强制拼接风格前缀到每个 prompt
+    final_prompts = [f"{prefix}, {p}" for p in raw_prompts]
+    return final_prompts
 
 
 def generate_images(prompts: list[str], output_dir: Path,
+                    image_style: str = "极简插画",
                     progress_callback=None) -> list[Path]:
-    """调用万相生成配图"""
+    """
+    调用万相生成配图，使用 style 参数 + prompt 前缀双重控制风格。
+
+    Args:
+        prompts: 已包含风格前缀的提示词列表
+        output_dir: 输出目录
+        image_style: 图片风格名称（用于获取 API style 参数）
+        progress_callback: 进度回调
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = []
+
+    style_cfg = _get_style_config(image_style)
+    api_style = style_cfg.get("style", "<auto>")
 
     for i, prompt_text in enumerate(prompts):
         if progress_callback:
             progress_callback(i / len(prompts), f"生成配图 {i+1}/{len(prompts)}...")
 
         try:
-            response = ImageSynthesis.async_call(
+            call_kwargs = dict(
                 model=IMAGE_MODEL,
                 prompt=prompt_text,
                 n=1,
                 size=IMAGE_SIZE,
             )
+            # wanx-v1 支持 style 参数
+            if IMAGE_MODEL == "wanx-v1":
+                call_kwargs["style"] = api_style
+
+            response = ImageSynthesis.async_call(**call_kwargs)
 
             if response.status_code == HTTPStatus.OK:
                 result = ImageSynthesis.wait(response.output.task_id)
@@ -91,7 +118,7 @@ def generate_images(prompts: list[str], output_dir: Path,
                         paths.append(img_path)
             time.sleep(1)
         except Exception as e:
-            print(f"❌ 配图 {i+1} 生成失败: {e}")
+            print(f"配图 {i+1} 生成失败: {e}")
 
     if progress_callback:
         progress_callback(1.0, "配图生成完成")

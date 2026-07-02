@@ -21,7 +21,8 @@ def generate_script(user_input: str, image_style: str, output_dir=None) -> dict:
         结构化脚本 dict
     """
     client = _get_client()
-    style_prompt = IMAGE_STYLES.get(image_style, IMAGE_STYLES["极简插画"])
+    style_cfg = IMAGE_STYLES.get(image_style, IMAGE_STYLES["极简插画"])
+    style_prompt = style_cfg["prompt_prefix"]
 
     prompt = f"""你是一个擅长B站/YouTube知识博主视频的脚本专家。
 
@@ -105,7 +106,8 @@ def regenerate_segment(segment_text: str, image_style: str) -> str:
         新的旁白文本
     """
     client = _get_client()
-    style_prompt = IMAGE_STYLES.get(image_style, IMAGE_STYLES["极简插画"])
+    style_cfg = IMAGE_STYLES.get(image_style, IMAGE_STYLES["极简插画"])
+    style_prompt = style_cfg["prompt_prefix"]
 
     prompt = f"""请重新优化以下视频旁白段落，要求：
 - 口语化中文，适合语音朗读
