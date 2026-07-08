@@ -1,4 +1,5 @@
 """阶段2: 封面图生成"""
+import base64
 import os
 import time
 from http import HTTPStatus
@@ -9,7 +10,7 @@ from dashscope import ImageSynthesis
 from openai import OpenAI
 
 from config import (
-    DASHSCOPE_API_KEY, QWEN_MODEL, QWEN_BASE_URL,
+    DASHSCOPE_API_KEY, QWEN_MODEL, QWEN_BASE_URL, VL_MODEL,
     IMAGE_MODEL, IMAGE_SIZE,
 )
 
@@ -96,3 +97,57 @@ def generate_covers(prompts: list[dict], output_dir: Path) -> list[Path]:
             print(f"❌ 封面 {i+1} 生成失败: {e}")
 
     return paths
+
+
+def enhance_prompt_with_reference(base_prompt: str, reference_image_path: Path) -> str:
+    """用 Qwen-VL 分析参考图，增强 prompt 使其风格一致。
+
+    Args:
+        base_prompt: 原始图片生成 prompt
+        reference_image_path: 参考图路径
+
+    Returns:
+        增强后的 prompt
+    """
+    reference_image_path = Path(reference_image_path)
+    if not reference_image_path.exists():
+        return base_prompt
+
+    try:
+        with open(reference_image_path, "rb") as f:
+            img_bytes = f.read()
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+        suffix = reference_image_path.suffix.lower().lstrip(".")
+        mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}.get(suffix, "image/jpeg")
+
+        client = _get_llm_client()
+        response = client.chat.completions.create(
+            model=VL_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime};base64,{img_b64}"},
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "Analyze this reference image's visual style, color palette, "
+                                "composition, and mood. Then enhance the following image generation "
+                                "prompt to match this reference's style. Return ONLY the enhanced "
+                                "English prompt, nothing else.\n\n"
+                                f"Original prompt: {base_prompt}"
+                            ),
+                        },
+                    ],
+                }
+            ],
+            temperature=0.7,
+        )
+        enhanced = response.choices[0].message.content.strip()
+        return enhanced if enhanced else base_prompt
+    except Exception as e:
+        print(f"参考图增强 prompt 失败: {e}")
+        return base_prompt

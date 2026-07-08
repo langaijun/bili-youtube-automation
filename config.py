@@ -14,7 +14,10 @@ QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 # TTS
 TTS_MODEL = "cosyvoice-v1"
+TTS_CLONE_MODEL = "cosyvoice-v3-flash"  # 语音克隆专用模型
 TTS_VOICE = "longyue"  # 默认音色
+CLONE_AUDIO_MIN_DURATION = 5   # 秒
+CLONE_AUDIO_MAX_DURATION = 30  # 秒
 
 # 可选音色列表
 TTS_VOICES = {
@@ -74,6 +77,7 @@ DEFAULT_STYLE = "极简插画"
 # 图片生成
 IMAGE_MODEL = "wanx2.1-t2i-plus"
 IMAGE_SIZE = "1280*720"
+VL_MODEL = "qwen-vl-max"  # 参考图分析用
 
 # 视频
 VIDEO_WIDTH = 1920
@@ -86,6 +90,25 @@ FADE_DURATION = 0.5
 # Ken Burns
 KB_ZOOM_START = 1.0
 KB_ZOOM_END = 1.05
+
+# PPT 模式
+PPT_SLIDE_COUNT_MIN = 8       # 最少幻灯片数
+PPT_SLIDE_COUNT_MAX = 12      # 最多幻灯片数
+SLIDE_TRANSITION_DURATION = 0.8  # 幻灯片间交叉淡入淡出时长（秒）
+
+# 进度条
+PROGRESS_BAR_HEIGHT = 4          # 像素
+PROGRESS_BAR_Y = VIDEO_HEIGHT - PROGRESS_BAR_HEIGHT  # 贴底部
+PROGRESS_BAR_BG = (255, 255, 255, 40)   # 半透明白底 (RGBA)
+PROGRESS_BAR_FG = (255, 255, 255, 200)  # 白色填充
+
+# 硬字幕（烧录到视频中）
+SUBTITLE_FONT_SIZE = 52
+SUBTITLE_FONT_COLOR = (255, 255, 255)       # 白色
+SUBTITLE_STROKE_COLOR = (0, 0, 0)           # 黑色描边
+SUBTITLE_STROKE_WIDTH = 3
+SUBTITLE_Y = int(VIDEO_HEIGHT * 0.82)       # 画面下方 82% 处
+SUBTITLE_MAX_CHARS = 18                     # 每行最多字符数
 
 # 路径
 BASE_DIR = Path(__file__).parent

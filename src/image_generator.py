@@ -124,3 +124,73 @@ def generate_images(prompts: list[str], output_dir: Path,
         progress_callback(1.0, "配图生成完成")
 
     return paths
+
+
+def generate_slide_images(slides: list[dict], output_dir: Path,
+                          image_style: str = "极简插画",
+                          progress_callback=None) -> list[Path]:
+    """
+    为每个 slide 生成一张图片（PPT 模式专用）。
+
+    Args:
+        slides: 脚本中的 slides 列表，每个含 id, image_prompt
+        output_dir: 输出目录
+        image_style: 图片风格名称（用于获取 API style 参数）
+        progress_callback: 进度回调
+
+    Returns:
+        生成的图片路径列表（顺序与 slides 一致）
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    paths = []
+
+    style_cfg = _get_style_config(image_style)
+    api_style = style_cfg.get("style", "<auto>")
+    prefix = style_cfg["prompt_prefix"]
+    total = len(slides)
+
+    for i, slide in enumerate(slides):
+        if progress_callback and total > 0:
+            progress_callback(i / total, f"生成幻灯片 {i+1}/{total}...")
+
+        raw_prompt = slide.get("image_prompt", "")
+        prompt_text = f"{prefix}, {raw_prompt}"
+        generated = False
+
+        try:
+            call_kwargs = dict(
+                model=IMAGE_MODEL,
+                prompt=prompt_text,
+                n=1,
+                size=IMAGE_SIZE,
+            )
+            if IMAGE_MODEL == "wanx-v1":
+                call_kwargs["style"] = api_style
+
+            response = ImageSynthesis.async_call(**call_kwargs)
+
+            if response.status_code == HTTPStatus.OK:
+                result = ImageSynthesis.wait(response.output.task_id)
+                if result.status_code == HTTPStatus.OK and result.output.results:
+                    image_url = result.output.results[0].get("url", "")
+                    if image_url:
+                        img_data = requests.get(image_url, timeout=30).content
+                        img_path = output_dir / f"slide_{slide['id']:02d}.jpg"
+                        with open(img_path, "wb") as f:
+                            f.write(img_data)
+                        paths.append(img_path)
+                        generated = True
+            time.sleep(1)
+        except Exception as e:
+            print(f"幻灯片 {slide['id']} 图片生成失败: {e}")
+
+        # 失败时追加 None，保持与 slides 列表的 1:1 索引对应
+        if not generated:
+            paths.append(None)
+
+    ok_count = sum(1 for p in paths if p is not None)
+    if progress_callback:
+        progress_callback(1.0, f"幻灯片图片生成完成 ({ok_count}/{total})")
+
+    return paths
